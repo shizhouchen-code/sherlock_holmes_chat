@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { streamChat, chatWithCsvTools, CODE_KEYWORDS } from '../services/gemini';
+import { streamChat, chatWithCsvTools, CODE_KEYWORDS, validateGeminiKey } from '../services/gemini';
 import { parseCsvToRows, executeTool, computeDatasetSummary, enrichWithEngagement, buildSlimCsv } from '../services/csvTools';
 import {
   getSessions,
@@ -9,6 +9,8 @@ import {
   deleteSession,
   saveMessage,
   loadMessages,
+  searchRag,
+  speakText,
 } from '../services/mongoApi';
 import EngagementChart from './EngagementChart';
 import './Chat.css';
@@ -50,6 +52,21 @@ const parseCSV = (text) => {
 const messageText = (m) => {
   if (m.parts) return m.parts.filter((p) => p.type === 'text').map((p) => p.text).join('\n');
   return m.content || '';
+};
+
+// Strip markdown for TTS (avoid reading syntax aloud)
+const stripMarkdown = (text) => {
+  if (!text) return '';
+  return text
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/`[^`]+`/g, (m) => m.slice(1, -1))
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/^#+\s+/gm, '')
+    .replace(/^\s*[-*]\s+/gm, ' ')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
 };
 
 // ── Structured part renderer (code execution responses) ───────────────────────
@@ -110,7 +127,7 @@ function StructuredParts({ parts }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function Chat({ username, onLogout }) {
+export default function Chat({ username, firstName, onLogout }) {
   const [sessions, setSessions] = useState([]);
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -124,8 +141,12 @@ export default function Chat({ username, onLogout }) {
   const [streaming, setStreaming] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [openMenuId, setOpenMenuId] = useState(null);
+  const [geminiKeyError, setGeminiKeyError] = useState(null);
+  const [playingMsgId, setPlayingMsgId] = useState(null);
+  const [loadingTtsMsgId, setLoadingTtsMsgId] = useState(null);
 
   const bottomRef = useRef(null);
+  const audioRef = useRef(null);
   const inputRef = useRef(null);
   const abortRef = useRef(false);
   const fileInputRef = useRef(null);
@@ -142,6 +163,17 @@ export default function Chat({ username, onLogout }) {
     };
     init();
   }, [username]);
+
+  // Validate Gemini API key on mount
+  useEffect(() => {
+    let cancelled = false;
+    validateGeminiKey().then((result) => {
+      if (!cancelled) {
+        setGeminiKeyError(result.ok ? null : result.error);
+      }
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     if (!activeSessionId || activeSessionId === 'new') {
@@ -320,7 +352,7 @@ export default function Chat({ username, onLogout }) {
 
   const handleSend = async () => {
     const text = input.trim();
-    if ((!text && !images.length && !csvContext) || streaming || !activeSessionId) return;
+    if ((!text && !images.length && !csvContext) || streaming || !activeSessionId || geminiKeyError) return;
 
     // Lazily create the session in DB on the very first message
     let sessionId = activeSessionId;
@@ -348,6 +380,16 @@ export default function Chat({ username, onLogout }) {
     //   else            — Google Search streaming (also used for "tell me about this file")
     const useTools = !!sessionCsvRows && !wantPythonOnly && !wantCode && !capturedCsv;
     const useCodeExecution = wantPythonOnly || wantCode;
+
+    // ── RAG: fetch Harry Potter chunks for text queries (when not in CSV tools mode) ──
+    let ragChunks = [];
+    if (text && !useTools) {
+      try {
+        ragChunks = await searchRag(text);
+      } catch (err) {
+        console.warn('[RAG]', err.message);
+      }
+    }
 
     // ── Build prompt ─────────────────────────────────────────────────────────
     // sessionSummary: auto-computed column stats, included with every message
@@ -386,10 +428,29 @@ ${sessionSummary}${slimCsvBlock}
       ? `[CSV columns: ${sessionCsvHeaders?.join(', ')}]\n\n${sessionSummary}\n\n---\n\n`
       : '';
 
+    // RAG prefix: Harry Potter book excerpts for context
+    const ragPrefix = ragChunks.length
+      ? `[Relevant excerpts from the Harry Potter books — use these to answer the question. Do not mention chunk_id or page_number in your response.]
+
+${ragChunks.map((c, i) => `--- Excerpt ${i + 1} ---\n${c.text}`).join('\n\n')}
+
+---
+
+`
+      : '';
+
     // userContent  — displayed in bubble and stored in MongoDB (never contains base64)
     // promptForGemini — sent to the Gemini API (may contain the full prefix)
     const userContent = text || (images.length ? '(Image)' : '(CSV attached)');
-    const promptForGemini = csvPrefix + (text || (images.length ? 'What do you see in this image?' : 'Please analyze this CSV data.'));
+    const isNewChat = messages.length === 0;
+    const greetingHint = isNewChat && firstName
+      ? `[The user's first name is ${firstName}. This is a new conversation — greet them warmly by their first name in your response.]\n\n`
+      : '';
+    const promptForGemini =
+      greetingHint +
+      ragPrefix +
+      csvPrefix +
+      (text || (images.length ? 'What do you see in this image?' : 'Please analyze this CSV data.'));
 
     const userMsg = {
       id: `u-${Date.now()}`,
@@ -454,6 +515,7 @@ ${sessionSummary}${slimCsvBlock}
                   content: fullContent,
                   charts: toolCharts.length ? toolCharts : undefined,
                   toolCalls: toolCalls.length ? toolCalls : undefined,
+                  ragChunks: ragChunks.length ? ragChunks : undefined,
                 }
               : msg
           )
@@ -465,13 +527,19 @@ ${sessionSummary}${slimCsvBlock}
           if (chunk.type === 'text') {
             fullContent += chunk.text;
             setMessages((m) =>
-              m.map((msg) => (msg.id === assistantId ? { ...msg, content: fullContent } : msg))
+              m.map((msg) =>
+                msg.id === assistantId
+                  ? { ...msg, content: fullContent, ragChunks: ragChunks.length ? ragChunks : undefined }
+                  : msg
+              )
             );
           } else if (chunk.type === 'fullResponse') {
             structuredParts = chunk.parts;
             setMessages((m) =>
               m.map((msg) =>
-                msg.id === assistantId ? { ...msg, content: '', parts: structuredParts } : msg
+                msg.id === assistantId
+                  ? { ...msg, content: '', parts: structuredParts, ragChunks: ragChunks.length ? ragChunks : undefined }
+                  : msg
               )
             );
           } else if (chunk.type === 'grounding') {
@@ -493,7 +561,7 @@ ${sessionSummary}${slimCsvBlock}
       );
     }
 
-    // Save plain text + any tool charts to DB
+    // Save plain text + any tool charts + ragChunks to DB
     const savedContent = structuredParts
       ? structuredParts.filter((p) => p.type === 'text').map((p) => p.text).join('\n')
       : fullContent;
@@ -503,7 +571,8 @@ ${sessionSummary}${slimCsvBlock}
       savedContent,
       null,
       toolCharts.length ? toolCharts : null,
-      toolCalls.length ? toolCalls : null
+      toolCalls.length ? toolCalls : null,
+      ragChunks.length ? ragChunks : null
     );
 
     setSessions((prev) =>
@@ -515,6 +584,43 @@ ${sessionSummary}${slimCsvBlock}
   };
 
   const removeImage = (i) => setImages((prev) => prev.filter((_, idx) => idx !== i));
+
+  const handleSpeak = async (msg) => {
+    const text = stripMarkdown(messageText(msg));
+    if (!text.trim()) return;
+    if (playingMsgId === msg.id) {
+      audioRef.current?.pause();
+      setPlayingMsgId(null);
+      return;
+    }
+    if (loadingTtsMsgId === msg.id) return; // already loading
+    try {
+      setLoadingTtsMsgId(msg.id);
+      const blob = await speakText(text);
+      setLoadingTtsMsgId(null);
+      const url = URL.createObjectURL(blob);
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = '';
+      }
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      setPlayingMsgId(msg.id);
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        setPlayingMsgId(null);
+      };
+      audio.onerror = () => {
+        URL.revokeObjectURL(url);
+        setPlayingMsgId(null);
+      };
+      await audio.play();
+    } catch (err) {
+      console.error('[TTS]', err);
+      setLoadingTtsMsgId(null);
+      setPlayingMsgId(null);
+    }
+  };
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
@@ -585,6 +691,12 @@ ${sessionSummary}${slimCsvBlock}
       {/* ── Main chat area ───────────────────────── */}
       <div className="chat-main">
         <>
+        {geminiKeyError && (
+          <div className="gemini-key-banner">
+            <span className="gemini-key-banner-icon">⚠</span>
+            <span>{geminiKeyError}</span>
+          </div>
+        )}
         <header className="chat-header">
           <h2 className="chat-header-title">{activeSession?.title ?? 'New Chat'}</h2>
         </header>
@@ -602,6 +714,20 @@ ${sessionSummary}${slimCsvBlock}
                 <span className="chat-msg-time">
                   {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </span>
+                {m.role === 'model' && messageText(m).trim() && (
+                  <button
+                    type="button"
+                    className={`speaker-btn ${loadingTtsMsgId === m.id ? 'loading' : ''} ${playingMsgId === m.id ? 'playing' : ''}`}
+                    onClick={() => handleSpeak(m)}
+                    disabled={!!loadingTtsMsgId}
+                    title={loadingTtsMsgId === m.id ? 'Loading...' : playingMsgId === m.id ? 'Stop' : 'Listen'}
+                    aria-label={loadingTtsMsgId === m.id ? 'Loading' : playingMsgId === m.id ? 'Stop playback' : 'Listen to message'}
+                  >
+                    {loadingTtsMsgId === m.id ? (
+                      <span className="speaker-loading"><span /><span /><span /></span>
+                    ) : playingMsgId === m.id ? '⏹' : '🔊'}
+                  </button>
+                )}
               </div>
 
               {/* CSV badge on user messages */}
@@ -672,6 +798,25 @@ ${sessionSummary}${slimCsvBlock}
                     metricColumn={chart.metricColumn}
                   />
                 ) : null
+              )}
+
+              {/* RAG chunk metadata (sources used from Harry Potter books) */}
+              {m.ragChunks?.length > 0 && (
+                <details className="rag-chunks-details">
+                  <summary className="rag-chunks-summary">
+                    📚 {m.ragChunks.length} book chunk{m.ragChunks.length > 1 ? 's' : ''} used
+                  </summary>
+                  <div className="rag-chunks-list">
+                    {m.ragChunks.map((chunk, i) => (
+                      <div key={i} className="rag-chunk-item">
+                        <span className="rag-chunk-meta">
+                          chunk_id: {chunk.chunk_id}
+                          {chunk.page_number != null && ` · page: ${chunk.page_number}`}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
               )}
 
               {/* Search sources */}
@@ -764,7 +909,7 @@ ${sessionSummary}${slimCsvBlock}
             ) : (
               <button
                 onClick={handleSend}
-                disabled={!input.trim() && !images.length && !csvContext}
+                disabled={(!input.trim() && !images.length && !csvContext) || !!geminiKeyError}
               >
                 Send
               </button>

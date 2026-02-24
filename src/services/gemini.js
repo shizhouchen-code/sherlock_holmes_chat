@@ -1,9 +1,35 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { CSV_TOOL_DECLARATIONS } from './csvTools';
 
-const genAI = new GoogleGenerativeAI(process.env.REACT_APP_GEMINI_API_KEY || '');
+const API_KEY = process.env.REACT_APP_GEMINI_API_KEY || '';
+const genAI = new GoogleGenerativeAI(API_KEY);
 
 const MODEL = 'gemini-2.0-flash';
+
+/** Test that the Gemini API key is valid. Returns { ok: true } or { ok: false, error: string }. */
+export async function validateGeminiKey() {
+  if (!API_KEY || API_KEY.trim() === '') {
+    return { ok: false, error: 'REACT_APP_GEMINI_API_KEY is missing. Add it to your .env file and restart.' };
+  }
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${API_KEY}`
+    );
+    if (!res.ok) {
+      const body = await res.text();
+      if (res.status === 403) {
+        return {
+          ok: false,
+          error: 'Gemini API key invalid or restricted. Check your key at aistudio.google.com/apikey',
+        };
+      }
+      return { ok: false, error: `API error ${res.status}: ${body.slice(0, 100)}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message || 'Network error' };
+  }
+}
 
 const SEARCH_TOOL = { googleSearch: {} };
 const CODE_EXEC_TOOL = { codeExecution: {} };

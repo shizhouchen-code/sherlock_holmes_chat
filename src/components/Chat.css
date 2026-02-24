@@ -1,3 +1,20 @@
+/* ── Gemini API key error banner ──────────────────────────────────────────── */
+
+.gemini-key-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.75rem 1rem;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  font-size: 0.9rem;
+}
+
+.gemini-key-banner-icon {
+  font-size: 1.2rem;
+}
+
 /* ── Overall layout ──────────────────────────────────────────────────────── */
 
 .chat-layout {
@@ -340,6 +357,51 @@
   font-size: 0.67rem;
   opacity: 0.45;
 }
+
+.speaker-btn {
+  margin-left: auto;
+  padding: 0.25rem 0.4rem;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.speaker-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.speaker-btn.playing {
+  background: rgba(34, 197, 94, 0.2);
+  border-color: rgba(34, 197, 94, 0.4);
+  color: #4ade80;
+}
+
+.speaker-btn.loading {
+  cursor: wait;
+}
+
+.speaker-loading {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+}
+
+.speaker-loading span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: thinking-bounce 1.3s infinite ease-in-out;
+}
+
+.speaker-loading span:nth-child(1) { animation-delay: 0s; }
+.speaker-loading span:nth-child(2) { animation-delay: 0.2s; }
+.speaker-loading span:nth-child(3) { animation-delay: 0.4s; }
 
 .chat-msg-content {
   font-size: 0.93rem;
@@ -937,6 +999,44 @@
 
 .tool-call-result {
   color: rgba(52, 211, 153, 0.75);
+  word-break: break-all;
+}
+
+/* ── RAG chunk metadata ───────────────────────────────────────────────── */
+.rag-chunks-details {
+  margin: 0.75rem 0 0.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.rag-chunks-summary {
+  padding: 0.45rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.45);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+.rag-chunks-summary::-webkit-details-marker { display: none; }
+.rag-chunks-summary:hover { color: rgba(255, 255, 255, 0.65); }
+
+.rag-chunks-list {
+  padding: 0.4rem 0.75rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.rag-chunk-item {
+  font-size: 0.74rem;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+.rag-chunk-meta {
+  color: rgba(255, 255, 255, 0.5);
   word-break: break-all;
 }
 

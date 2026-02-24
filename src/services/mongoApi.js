@@ -12,10 +12,10 @@ const api = async (path, options = {}) => {
 
 // ── Users ────────────────────────────────────────────────────────────────────
 
-export const createUser = async (username, password, email = '') => {
+export const createUser = async (username, password, firstName = '', lastName = '', email = '') => {
   await api('/api/users', {
     method: 'POST',
-    body: JSON.stringify({ username, password, email }),
+    body: JSON.stringify({ username, password, firstName, lastName, email }),
   });
 };
 
@@ -24,7 +24,7 @@ export const findUser = async (username, password) => {
     method: 'POST',
     body: JSON.stringify({ username, password }),
   });
-  return data.ok ? { username: data.username } : null;
+  return data.ok ? { username: data.username, firstName: data.firstName } : null;
 };
 
 // ── Sessions ─────────────────────────────────────────────────────────────────
@@ -53,13 +53,46 @@ export const updateSessionTitle = async (sessionId, title) => {
 
 // ── Messages ─────────────────────────────────────────────────────────────────
 
-export const saveMessage = async (sessionId, role, content, imageData = null, charts = null, toolCalls = null) => {
+export const saveMessage = async (
+  sessionId,
+  role,
+  content,
+  imageData = null,
+  charts = null,
+  toolCalls = null,
+  ragChunks = null
+) => {
   return api('/api/messages', {
     method: 'POST',
-    body: JSON.stringify({ session_id: sessionId, role, content, imageData, charts, toolCalls }),
+    body: JSON.stringify({ session_id: sessionId, role, content, imageData, charts, toolCalls, ragChunks }),
   });
 };
 
 export const loadMessages = async (sessionId) => {
   return api(`/api/messages?session_id=${encodeURIComponent(sessionId)}`);
+};
+
+// ── RAG ─────────────────────────────────────────────────────────────────────
+
+export const searchRag = async (query) => {
+  const data = await api('/api/rag/search', {
+    method: 'POST',
+    body: JSON.stringify({ query }),
+  });
+  return data.chunks || [];
+};
+
+// ── TTS ─────────────────────────────────────────────────────────────────────
+
+export const speakText = async (text) => {
+  const res = await fetch(`${API}/api/tts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || res.statusText);
+  }
+  return res.blob();
 };

@@ -1,159 +1,63 @@
-# Chat App
+# Chat App — Harry Potter RAG + Lisa AI
 
-A React chatbot with Gemini AI, web search, user auth, MongoDB persistence, and client-side data analysis. Glassmorphism UI with streaming responses, CSV upload, and code execution.
+A React chatbot for MBA students featuring **Lisa** (Blackpink) as a Harry Potter–loving AI assistant. Uses **Retrieval Augmented Generation (RAG)** to answer questions from the Harry Potter books, plus CSV analysis, text-to-speech, and streaming chat with Gemini.
 
-## How It Works
+---
 
-- **Frontend (React)** – Login/create account, chat UI with streaming, drag-and-drop CSV/images, Recharts bar charts
-- **Backend (Express)** – REST API for users and sessions, connects to MongoDB
-- **AI (Gemini)** – Streaming chat, Google Search grounding, Python code execution, and function calling for client-side tools
-- **Storage (MongoDB)** – Users and chat sessions stored in `chatapp` database
+## What This App Does
+
+- **Chat with Lisa** — AI assistant with a casual, expressive personality (modeled after Lisa from Blackpink)
+- **RAG over Harry Potter** — Vector search on a book corpus; Lisa answers from retrieved excerpts and shows chunk metadata (chunk_id, page_number)
+- **User accounts** — Create account (username, first name, last name, email, password) and log in
+- **Chat sessions** — Multiple conversations, each saved in MongoDB; Lisa greets you by first name in new chats
+- **CSV analysis** — Upload CSV files; Lisa can run stats, value counts, and top-N queries via client-side tools, or Python for plots
+- **Text-to-speech** — ElevenLabs voice playback for AI responses (speaker button on each message)
+- **Streaming responses** — Real-time text, Google Search grounding, and code execution
+
+---
 
 ## API Keys & Environment Variables
 
-Create a `.env` file in the project root with:
+Create a `.env` file in the project root. Copy from `.env.example` and fill in your values.
 
 | Variable | Required | Where used | Description |
 |----------|----------|------------|-------------|
-| `REACT_APP_GEMINI_API_KEY` | Yes | Frontend (baked in at build) | Google Gemini API key. Get one at [Google AI Studio](https://aistudio.google.com/apikey). |
-| `REACT_APP_MONGODB_URI` | Yes | Backend | MongoDB Atlas connection string. Format: `mongodb+srv://USER:PASSWORD@CLUSTER.mongodb.net/` |
-| `REACT_APP_API_URL` | Production only | Frontend (baked in at build) | Full URL of the backend, e.g. `https://your-backend.onrender.com`. Leave blank for local dev (proxy handles it). |
-
-The backend also accepts `MONGODB_URI` or `REACT_APP_MONGO_URI` as the MongoDB connection string if you prefer those names.
+| `REACT_APP_GEMINI_API_KEY` | **Yes** | Frontend | Gemini API key for chat. [Get one](https://aistudio.google.com/apikey). |
+| `GEMINI_API_KEY` | **Yes** | Backend | Same key for RAG embeddings. Can reuse the value above. |
+| `MONGODB_URI` or `REACT_APP_MONGODB_URI` | **Yes** | Backend | MongoDB Atlas connection string. Format: `mongodb+srv://USER:PASSWORD@CLUSTER.mongodb.net/` |
+| `ELEVENLABS_API_KEY` | Optional | Backend | ElevenLabs TTS. Without it, the app runs but the speaker button will fail. |
+| `REACT_APP_API_URL` | Production only | Frontend | Backend URL when deployed (e.g. `https://your-backend.onrender.com`). Leave blank for local dev. |
+| `RAG_VECTOR_INDEX` | Optional | Backend | Name of your Atlas vector index on `harry_potter`. Default: `vector_index`. |
 
 ### Example `.env` (local development)
 
 ```
 REACT_APP_GEMINI_API_KEY=AIzaSy...
-REACT_APP_MONGODB_URI=mongodb+srv://user:password@cluster.mongodb.net/
-# REACT_APP_API_URL not needed locally — the dev server proxies /api to localhost:3001
+GEMINI_API_KEY=AIzaSy...
+MONGODB_URI=mongodb+srv://user:password@cluster.mongodb.net/
+ELEVENLABS_API_KEY=sk_...
+# REACT_APP_API_URL not needed locally — proxy handles it
 ```
 
-## MongoDB Setup
-
-1. Create a [MongoDB Atlas](https://www.mongodb.com/cloud/atlas) account and cluster.
-2. Get your connection string (Database → Connect → Drivers).
-3. Put it in `.env` as `REACT_APP_MONGODB_URI`.
-
-All collections are created automatically on first use.
-
-### Database: `chatapp`
-
-#### Collection: `users`
-
-One document per registered user.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `_id` | ObjectId | Auto-generated |
-| `username` | string | Lowercase username |
-| `password` | string | bcrypt hash |
-| `email` | string | Email address (optional) |
-| `createdAt` | string | ISO timestamp |
-
-#### Collection: `sessions`
-
-One document per chat conversation.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `_id` | ObjectId | Auto-generated — used as `session_id` |
-| `username` | string | Owner of this chat |
-| `agent` | string | AI persona (e.g. `"lisa"`) |
-| `title` | string | Auto-generated name, e.g. `"Chat · Feb 18, 2:34 PM"` |
-| `createdAt` | string | ISO timestamp |
-| `messages` | array | Ordered list of messages (see below) |
-
-Each item in `messages`:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `role` | string | `"user"` or `"model"` |
-| `content` | string | Message text (plain, no CSV base64) |
-| `timestamp` | string | ISO timestamp |
-| `imageData` | array | *(optional)* Base64 image attachments `[{ data, mimeType }]` |
-| `toolCalls` | array | *(optional)* Client-side tool invocations `[{ name, args, result }]` |
-
-## Deploying to Render
-
-The repo includes a `render.yaml` Blueprint that configures both the backend (Web Service) and frontend (Static Site) in one file.
-
-### Step-by-step
-
-**1. Deploy the backend first**
-
-Go to [render.com](https://render.com) → New → **Web Service** → connect your GitHub repo.
-
-| Setting | Value |
-|---------|-------|
-| Environment | Node |
-| Build Command | `npm install` |
-| Start Command | `node server/index.js` |
-
-Add this environment variable in the Render dashboard:
-
-| Variable | Value |
-|----------|-------|
-| `MONGODB_URI` | Your MongoDB Atlas connection string |
-
-Once deployed, copy the backend URL (e.g. `https://chatapp-backend.onrender.com`).
-
 ---
 
-**2. Deploy the frontend**
+## How to Run the App
 
-New → **Static Site** → same repo.
-
-| Setting | Value |
-|---------|-------|
-| Build Command | `npm install && npm run build` |
-| Publish Directory | `build` |
-
-Add these environment variables:
-
-| Variable | Value |
-|----------|-------|
-| `REACT_APP_GEMINI_API_KEY` | Your Gemini API key |
-| `REACT_APP_API_URL` | Backend URL from step 1, e.g. `https://chatapp-backend.onrender.com` |
-
-> **Important:** `REACT_APP_*` variables are baked into the JavaScript bundle at build time. If you change them in the dashboard, you must trigger a new deploy of the static site.
-
----
-
-**Or use the Blueprint (both services at once)**
-
-New → **Blueprint** → connect your repo. Render reads `render.yaml` and creates both services. You'll be prompted to enter the four secrets (`MONGODB_URI`, `REACT_APP_GEMINI_API_KEY`, `REACT_APP_API_URL`) after creation.
-
-> **Note:** Because `REACT_APP_API_URL` must point to the backend's URL, which is only known after the backend is deployed, you may need to set `REACT_APP_API_URL` and re-deploy the static site after the first Blueprint run.
-
----
-
-### Free tier cold starts
-
-Render's free plan spins down services after 15 minutes of inactivity. The first request after a sleep takes ~30 seconds. Upgrade to the Starter plan ($7/mo) to avoid this.
-
----
-
-## Running the App
-
-### Option 1: Both together (single terminal)
+### 1. Install dependencies
 
 ```bash
 npm install
+```
+
+### 2. Run backend and frontend
+
+**Option A — Single terminal (both together):**
+
+```bash
 npm start
 ```
 
-> **Note:** `npm install` installs all required packages automatically. See [Dependencies](#dependencies) below for the full list.
-
-### Option 2: Separate terminals (recommended for development)
-
-First, install dependencies once:
-
-```bash
-npm install
-```
-
-Then open two terminals in the project root:
+**Option B — Separate terminals (recommended for development):**
 
 **Terminal 1 — Backend:**
 ```bash
@@ -165,86 +69,143 @@ npm run server
 npm run client
 ```
 
-This starts:
+- **Backend:** http://localhost:3001  
+- **Frontend:** http://localhost:3000  
 
-- **Backend** – http://localhost:3001  
-- **Frontend** – http://localhost:3000  
+Open **http://localhost:3000** in your browser. The React dev server proxies `/api` requests to the backend.
 
-Use the app at **http://localhost:3000**. The React dev server proxies `/api` requests to the backend.
+### Verify backend
 
-### Verify Backend
-
-- http://localhost:3001 – Server status page  
-- http://localhost:3001/api/status – JSON with `usersCount` and `sessionsCount`
-
-## Dependencies
-
-All packages are installed via `npm install`. Key dependencies:
-
-### Frontend
-
-| Package | Purpose |
-|---------|---------|
-| `react`, `react-dom` | UI framework |
-| `react-scripts` | Create React App build tooling |
-| `@google/generative-ai` | Gemini API client (chat, function calling, code execution, search grounding) |
-| `react-markdown` | Render markdown in AI responses |
-| `remark-gfm` | GitHub-flavored markdown (tables, strikethrough, etc.) |
-| `recharts` | Interactive charts (available for future visualizations) |
-
-### Backend
-
-| Package | Purpose |
-|---------|---------|
-| `express` | HTTP server and REST API |
-| `mongodb` | MongoDB driver for Node.js |
-| `bcryptjs` | Password hashing |
-| `cors` | Cross-origin request headers |
-| `dotenv` | Load `.env` variables |
-
-### Dev / Tooling
-
-| Package | Purpose |
-|---------|---------|
-| `concurrently` | Run frontend and backend with a single `npm start` |
+- http://localhost:3001 — Server status page  
+- http://localhost:3001/api/status — JSON with `usersCount` and `sessionsCount`
 
 ---
 
-## Features
+## MongoDB Setup
 
-- **Create account / Login** – Username + password, hashed with bcrypt
-- **Session-based chat history** – Each conversation is a separate session; sidebar lists all chats with delete option
-- **Streaming Gemini responses** – Text streams in real time with animated "..." while thinking; Stop button to cancel
-- **Google Search grounding** – Answers include cited web sources for factual queries
-- **Python code execution** – Gemini writes and runs Python for plots, regression, histogram, scatter, and any analysis the JS tools can't handle
-- **CSV upload** – Drag-and-drop or click to attach a CSV; a slim version of the data (key columns as plain text) plus a full statistical summary are sent to Gemini automatically
-- **Auto-computed engagement column** – When a CSV has `Favorite Count` and `View Count` columns, an `engagement` ratio (Favorite Count / View Count) is added automatically to every row
-- **Client-side data analysis tools** – Fast, zero-cost function-calling tools that run in the browser. Gemini calls these automatically for data questions; results are saved to MongoDB alongside the message:
-  - `compute_column_stats(column)` – mean, median, std, min, max, count for any numeric column
-  - `get_value_counts(column, top_n)` – frequency count of each unique value in a categorical column
-  - `get_top_tweets(sort_column, n, ascending)` – top or bottom N tweets sorted by any metric (including `engagement`), with tweet text and key metrics
-- **Tool routing logic** – The app automatically routes requests: client-side JS tools for simple stats, Python code execution for plots and complex models, Google Search for factual queries
-- **Markdown rendering** – AI responses render headers, lists, code blocks, tables, and links
-- **Image support** – Attach images via drag-and-drop, the 📎 button, or paste from clipboard (Ctrl+V)
+### 1. Create a cluster
 
-## Chat System Prompt
+1. Sign up at [MongoDB Atlas](https://www.mongodb.com/cloud/atlas)
+2. Create a cluster (free tier is fine)
+3. Database Access → Add user (username + password)
+4. Network Access → Add IP (or `0.0.0.0/0` for development)
+5. Database → Connect → Drivers → copy connection string
+6. Put it in `.env` as `MONGODB_URI` or `REACT_APP_MONGODB_URI`
 
-The AI’s system instructions are loaded from **`public/prompt_chat.txt`**. Edit this file to change the assistant’s behavior (tone, role, format, etc.). Changes take effect on the next message; no rebuild needed.
+### 2. Databases and collections
 
-### How to Get a Good Persona Prompt (Make the AI Sound Like Someone)
+The app uses two databases:
 
-To make the AI sound like a specific person (celebrity, character, or role), ask your AI assistant or prompt engineer to do the following:
+#### Database: `chatapp`
 
-1. **Pull a bio** – “Look up [person’s name] on Wikipedia and summarize their background, career, and key facts.”
+| Collection | Purpose |
+|------------|---------|
+| `users` | User accounts (username, password hash, firstName, lastName, email) |
+| `sessions` | Chat conversations (title, messages, charts, tool calls, RAG chunks) |
 
-2. **Find speech examples** – “Search for interviews [person] has done and pull direct quotes that show how they talk—phrases they use, tone, vocabulary.”
+Collections are created automatically on first use.
 
-3. **Describe the vibe** – “What’s their personality? Confident, shy, funny, formal? List 3–5 traits.”
+#### Database: `rag_docs`
 
-4. **Define the role** – “This person is my assistant for [context, e.g. a Yale SOM course on Generative AI]. They should help with [specific tasks] while staying in character.”
+| Collection | Purpose |
+|------------|---------|
+| `harry_potter` | Vector store for RAG. Each document has `text`, `chunk_id`, `page_number`, and `embedding` (768-dim vector). |
 
-5. **Ask for the full prompt** – “Write a system prompt for `prompt_chat.txt` that includes: (a) a short bio, (b) speech examples and phrases to mimic, (c) personality traits, and (d) their role as my assistant for [your use case].”
+### 3. Vector search index (for RAG)
 
-**Example request you can paste into ChatGPT/Claude/etc.:**
+To enable RAG, create a **Vector Search Index** on `rag_docs.harry_potter`:
 
-> Write a system prompt for a chatbot. The AI should sound like [Person X]. Pull their Wikipedia page and 2–3 interviews. Include: (1) a brief bio, (2) 5–8 direct quotes showing how they speak, (3) personality traits, and (4) their role as my teaching assistant for [Course Name] taught by [Professor] at [School]. Put it all in a format I can paste into `prompt_chat.txt`.
+1. In Atlas: **Search** → **Create Index**
+2. Choose **JSON Editor**
+3. Index name: `vector_index` (or set `RAG_VECTOR_INDEX` in `.env`)
+4. Collection: `rag_docs.harry_potter`
+5. Field: `embedding` — type **vector**, dimensions **768**
+
+Your documents must have an `embedding` field with 768-dimensional vectors (e.g. from `gemini-embedding-001` with `output_dimensionality: 768`). If you have a different embedding model, re-index with matching dimensions.
+
+---
+
+## Hosting on Render
+
+Deploy the backend as a **Web Service** and the frontend as a **Static Site**.
+
+### Step 1: Deploy the backend (Web Service)
+
+1. [Render](https://render.com) → **New** → **Web Service**
+2. Connect your GitHub repo
+3. Settings:
+
+| Setting | Value |
+|---------|-------|
+| Environment | Node |
+| Build Command | `npm install` |
+| Start Command | `node server/index.js` |
+
+4. **Environment variables** (add in Render dashboard):
+
+| Variable | Value |
+|----------|-------|
+| `MONGODB_URI` | Your MongoDB Atlas connection string |
+| `GEMINI_API_KEY` | Your Gemini API key |
+| `ELEVENLABS_API_KEY` | (Optional) ElevenLabs API key |
+
+5. Deploy. Copy the backend URL (e.g. `https://your-app.onrender.com`).
+
+### Step 2: Deploy the frontend (Static Site)
+
+1. **New** → **Static Site** → same repo
+2. Settings:
+
+| Setting | Value |
+|---------|-------|
+| Build Command | `npm install && npm run build` |
+| Publish Directory | `build` |
+
+3. **Environment variables**:
+
+| Variable | Value |
+|----------|-------|
+| `REACT_APP_GEMINI_API_KEY` | Your Gemini API key |
+| `REACT_APP_API_URL` | Backend URL from Step 1 (e.g. `https://your-app.onrender.com`) |
+
+> **Important:** `REACT_APP_*` variables are baked in at build time. If you change them, trigger a new deploy.
+
+4. Deploy. Use the static site URL as your app.
+
+### Free tier note
+
+Render’s free plan spins down after ~15 minutes of inactivity. The first request after sleep can take ~30 seconds. Paid plans avoid this.
+
+---
+
+## Project Structure
+
+```
+├── server/
+│   └── index.js          # Express API (users, sessions, RAG, TTS)
+├── src/
+│   ├── components/
+│   │   ├── Auth.js       # Login / create account
+│   │   ├── Chat.js       # Main chat UI
+│   │   └── ...
+│   └── services/
+│       ├── gemini.js     # Gemini chat, streaming, tools
+│       ├── mongoApi.js   # API client (users, sessions, RAG, TTS)
+│       └── csvTools.js   # CSV parsing, tools, engagement
+├── public/
+│   └── prompt_chat.txt   # Lisa's system prompt (edit to change persona)
+├── .env                  # Your secrets (not in git)
+└── package.json
+```
+
+---
+
+## Customizing the AI Persona
+
+Edit **`public/prompt_chat.txt`** to change Lisa’s personality, tone, or role. The file is loaded at runtime; no rebuild needed.
+
+---
+
+## License
+
+For course use. See your instructor for terms.

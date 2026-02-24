@@ -10,13 +10,63 @@ app.use(express.json({ limit: '10mb' }));
 
 const URI = process.env.REACT_APP_MONGODB_URI || process.env.MONGODB_URI || process.env.REACT_APP_MONGO_URI;
 const DB = 'chatapp';
+const RAG_DB = 'rag_docs';
+const RAG_COLLECTION = 'harry_potter';
+const RAG_VECTOR_INDEX = process.env.RAG_VECTOR_INDEX || 'vector_index';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.REACT_APP_GEMINI_API_KEY;
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
+const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || 'dR1Ptm3rjBUIbHiaywdJ';
 
 let db;
+let mongoClient;
 
 async function connect() {
-  const client = await MongoClient.connect(URI);
-  db = client.db(DB);
+  mongoClient = await MongoClient.connect(URI);
+  db = mongoClient.db(DB);
   console.log('MongoDB connected');
+}
+
+// ── Validate Gemini API key at startup ───────────────────────────────────────
+async function validateGeminiKey() {
+  if (!GEMINI_API_KEY || !GEMINI_API_KEY.trim()) {
+    console.warn('[RAG] GEMINI_API_KEY missing — RAG embeddings will fail. Add to .env');
+    return;
+  }
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${GEMINI_API_KEY}`
+    );
+    if (!res.ok) {
+      console.warn('[RAG] Gemini API key invalid or restricted (', res.status, '). RAG will fail.');
+      return;
+    }
+    console.log('[RAG] Gemini API key OK');
+  } catch (err) {
+    console.warn('[RAG] Could not validate Gemini key:', err.message);
+  }
+}
+
+// ── Embed query using Google Gemini API ───────────────────────────────────────
+async function embedQuery(query) {
+  if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY required for RAG');
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${GEMINI_API_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: { parts: [{ text: query }] },
+        taskType: 'RETRIEVAL_QUERY',
+        output_dimensionality: 768,
+      }),
+    }
+  );
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Embedding failed: ${err}`);
+  }
+  const data = await res.json();
+  return data.embedding?.values || [];
 }
 
 app.get('/', (req, res) => {
@@ -47,9 +97,11 @@ app.get('/api/status', async (req, res) => {
 
 app.post('/api/users', async (req, res) => {
   try {
-    const { username, password, email } = req.body;
+    const { username, password, firstName, lastName, email } = req.body;
     if (!username || !password)
       return res.status(400).json({ error: 'Username and password required' });
+    if (!firstName || !lastName || !email)
+      return res.status(400).json({ error: 'First name, last name, and email required' });
     const name = String(username).trim().toLowerCase();
     const existing = await db.collection('users').findOne({ username: name });
     if (existing) return res.status(400).json({ error: 'Username already exists' });
@@ -57,7 +109,9 @@ app.post('/api/users', async (req, res) => {
     await db.collection('users').insertOne({
       username: name,
       password: hashed,
-      email: email ? String(email).trim().toLowerCase() : null,
+      firstName: String(firstName).trim(),
+      lastName: String(lastName).trim(),
+      email: String(email).trim().toLowerCase(),
       createdAt: new Date().toISOString(),
     });
     res.json({ ok: true });
@@ -76,7 +130,7 @@ app.post('/api/users/login', async (req, res) => {
     if (!user) return res.status(401).json({ error: 'User not found' });
     const ok = await bcrypt.compare(password, user.password);
     if (!ok) return res.status(401).json({ error: 'Invalid password' });
-    res.json({ ok: true, username: name });
+    res.json({ ok: true, username: name, firstName: user.firstName || null });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -151,7 +205,7 @@ app.patch('/api/sessions/:id/title', async (req, res) => {
 
 app.post('/api/messages', async (req, res) => {
   try {
-    const { session_id, role, content, imageData, charts, toolCalls } = req.body;
+    const { session_id, role, content, imageData, charts, toolCalls, ragChunks } = req.body;
     if (!session_id || !role || content === undefined)
       return res.status(400).json({ error: 'session_id, role, content required' });
     const msg = {
@@ -163,6 +217,7 @@ app.post('/api/messages', async (req, res) => {
       }),
       ...(charts?.length && { charts }),
       ...(toolCalls?.length && { toolCalls }),
+      ...(ragChunks?.length && { ragChunks }),
     };
     await db.collection('sessions').updateOne(
       { _id: new ObjectId(session_id) },
@@ -198,10 +253,96 @@ app.get('/api/messages', async (req, res) => {
           : undefined,
         charts: m.charts?.length ? m.charts : undefined,
         toolCalls: m.toolCalls?.length ? m.toolCalls : undefined,
+        ragChunks: m.ragChunks?.length ? m.ragChunks : undefined,
       };
     });
     res.json(msgs);
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── TTS: ElevenLabs text-to-speech ───────────────────────────────────────────
+
+app.post('/api/tts', async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text || typeof text !== 'string')
+      return res.status(400).json({ error: 'text (string) required' });
+    if (!ELEVENLABS_API_KEY)
+      return res.status(500).json({ error: 'ELEVENLABS_API_KEY not configured' });
+
+    const voiceId = ELEVENLABS_VOICE_ID;
+    const ttsRes = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+      method: 'POST',
+      headers: {
+        'xi-api-key': ELEVENLABS_API_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        text: text.slice(0, 5000),
+        model_id: 'eleven_flash_v2_5',
+      }),
+    });
+
+    if (!ttsRes.ok) {
+      const errText = await ttsRes.text();
+      return res.status(ttsRes.status).json({ error: errText || 'ElevenLabs TTS failed' });
+    }
+
+    const audioBuffer = await ttsRes.arrayBuffer();
+    res.set('Content-Type', 'audio/mpeg');
+    res.send(Buffer.from(audioBuffer));
+  } catch (err) {
+    console.error('[TTS]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── RAG: Vector search on Harry Potter collection ────────────────────────────
+
+app.post('/api/rag/search', async (req, res) => {
+  try {
+    const { query } = req.body;
+    if (!query || typeof query !== 'string')
+      return res.status(400).json({ error: 'query (string) required' });
+
+    const vector = await embedQuery(query.trim());
+    if (vector.length !== 768)
+      return res.status(500).json({ error: `Expected 768-dim embedding, got ${vector.length}` });
+
+    const ragDb = mongoClient.db(RAG_DB);
+    const pipeline = [
+      {
+        $vectorSearch: {
+          index: RAG_VECTOR_INDEX,
+          path: 'embedding',
+          queryVector: vector,
+          numCandidates: 100,
+          limit: 5,
+        },
+      },
+      {
+        $project: {
+          text: 1,
+          chunk_id: 1,
+          page_number: 1,
+          _id: 0,
+        },
+      },
+    ];
+
+    const chunks = await ragDb.collection(RAG_COLLECTION).aggregate(pipeline).toArray();
+
+    res.json({
+      chunks: chunks.map((c) => ({
+        text: c.text,
+        chunk_id: c.chunk_id,
+        page_number: c.page_number,
+      })),
+    });
+  } catch (err) {
+    console.error('[RAG search]', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -211,6 +352,7 @@ app.get('/api/messages', async (req, res) => {
 const PORT = process.env.PORT || 3001;
 
 connect()
+  .then(() => validateGeminiKey())
   .then(() => {
     app.listen(PORT, () => console.log(`Server on http://localhost:${PORT}`));
   })
