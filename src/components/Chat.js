@@ -147,12 +147,15 @@ export default function Chat({ username, firstName, onLogout }) {
   const [mongoAvailable, setMongoAvailable] = useState(true);
   const [playingMsgId, setPlayingMsgId] = useState(null);
   const [loadingTtsMsgId, setLoadingTtsMsgId] = useState(null);
+  const [voiceMode, setVoiceMode] = useState(false);
 
   const bottomRef = useRef(null);
   const audioRef = useRef(null);
+  const audioUrlRef = useRef(null);
   const inputRef = useRef(null);
   const abortRef = useRef(false);
   const fileInputRef = useRef(null);
+  const autoSpokenMessageIdsRef = useRef(new Set());
   // Set to true immediately before setActiveSessionId() is called during a send
   // so the messages useEffect knows to skip the reload (streaming is in progress).
   const justCreatedSessionRef = useRef(false);
@@ -633,33 +636,45 @@ ${ragChunks.map((c, i) => `--- Excerpt ${i + 1} ---\n${c.text}`).join('\n\n')}
 
   const removeImage = (i) => setImages((prev) => prev.filter((_, idx) => idx !== i));
 
-  const handleSpeak = async (msg) => {
+  const handleSpeak = async (msg, manual = true) => {
     const text = stripMarkdown(messageText(msg));
     if (!text.trim()) return;
-    if (playingMsgId === msg.id) {
+    if (manual && playingMsgId === msg.id) {
       audioRef.current?.pause();
       setPlayingMsgId(null);
       return;
     }
+    if (!manual && playingMsgId === msg.id) return;
     if (loadingTtsMsgId === msg.id) return; // already loading
     try {
       setLoadingTtsMsgId(msg.id);
       const blob = await speakText(text);
       setLoadingTtsMsgId(null);
       const url = URL.createObjectURL(blob);
+      if (audioUrlRef.current) {
+        URL.revokeObjectURL(audioUrlRef.current);
+        audioUrlRef.current = null;
+      }
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.src = '';
       }
       const audio = new Audio(url);
       audioRef.current = audio;
+      audioUrlRef.current = url;
       setPlayingMsgId(msg.id);
       audio.onended = () => {
-        URL.revokeObjectURL(url);
+        if (audioUrlRef.current === url) {
+          URL.revokeObjectURL(url);
+          audioUrlRef.current = null;
+        }
         setPlayingMsgId(null);
       };
       audio.onerror = () => {
-        URL.revokeObjectURL(url);
+        if (audioUrlRef.current === url) {
+          URL.revokeObjectURL(url);
+          audioUrlRef.current = null;
+        }
         setPlayingMsgId(null);
       };
       await audio.play();
@@ -669,6 +684,34 @@ ${ragChunks.map((c, i) => `--- Excerpt ${i + 1} ---\n${c.text}`).join('\n\n')}
       setPlayingMsgId(null);
     }
   };
+
+  useEffect(() => {
+    if (voiceMode) return;
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = '';
+    }
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
+    setPlayingMsgId(null);
+    setLoadingTtsMsgId(null);
+  }, [voiceMode]);
+
+  useEffect(() => {
+    if (!voiceMode || streaming || loadingTtsMsgId) return;
+
+    const latestModelMessage = [...messages]
+      .reverse()
+      .find((m) => m.role === 'model' && messageText(m).trim());
+
+    if (!latestModelMessage) return;
+    if (autoSpokenMessageIdsRef.current.has(latestModelMessage.id)) return;
+
+    autoSpokenMessageIdsRef.current.add(latestModelMessage.id);
+    handleSpeak(latestModelMessage, false);
+  }, [messages, voiceMode, streaming, loadingTtsMsgId]);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
@@ -753,6 +796,15 @@ ${ragChunks.map((c, i) => `--- Excerpt ${i + 1} ---\n${c.text}`).join('\n\n')}
         )}
         <header className="chat-header">
           <h2 className="chat-header-title">{activeSession?.title ?? 'New Chat'}</h2>
+          <button
+            type="button"
+            className={`voice-mode-btn ${voiceMode ? 'on' : 'off'}`}
+            onClick={() => setVoiceMode((v) => !v)}
+            title={voiceMode ? 'Voice mode on' : 'Voice mode off'}
+            aria-pressed={voiceMode}
+          >
+            {voiceMode ? 'Voice Mode: On' : 'Voice Mode: Off'}
+          </button>
         </header>
 
         <div

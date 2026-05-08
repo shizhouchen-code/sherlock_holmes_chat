@@ -6,6 +6,7 @@ const GATE_PASSWORD = process.env.REACT_APP_GATE_PASSWORD;
 const DRAG_TOKEN = 'unlock-symbol';
 
 function App() {
+  const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [gateError, setGateError] = useState('');
@@ -44,7 +45,7 @@ function App() {
   };
 
   if (isUnlocked) {
-    return <Chat username="Guest" firstName={null} onLogout={handleLogout} />;
+    return <Chat username={name.trim() || 'Guest'} firstName={null} onLogout={handleLogout} />;
   }
 
   return (
@@ -52,6 +53,16 @@ function App() {
       <div className="gate-panel">
         <h1 className="gate-title">Unlock App</h1>
         <p className="gate-subtitle">Restricted access.</p>
+
+        <div className="gate-input-row">
+          <input
+            type="text"
+            className="gate-password-input"
+            placeholder="Enter name"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+        </div>
 
         <div
           className={`gate-input-row ${isDropTargetActive ? 'drop-active' : ''}`}

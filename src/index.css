@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Petit+Formal+Script&display=swap');
 
 * {
   box-sizing: border-box;
@@ -16,15 +16,33 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
-  /* Deep gradient background — glass panels float on top of this */
-  background: #0d1117;
+  /* Old-fashioned tweed / herringbone texture */
+  background-color: #3f3128;
   background-image:
-    radial-gradient(ellipse at 20% 50%, rgba(99, 102, 241, 0.18) 0%, transparent 55%),
-    radial-gradient(ellipse at 80% 20%, rgba(139, 92, 246, 0.14) 0%, transparent 50%),
-    radial-gradient(ellipse at 60% 80%, rgba(59, 130, 246, 0.12) 0%, transparent 50%),
-    linear-gradient(160deg, #0d1117 0%, #131929 50%, #0d1230 100%);
+    repeating-linear-gradient(
+      45deg,
+      rgba(255, 255, 255, 0.04) 0px,
+      rgba(255, 255, 255, 0.04) 2px,
+      rgba(0, 0, 0, 0) 1px,
+      rgba(0, 0, 0, 0) 8px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      rgba(255, 255, 255, 0.03) 0px,
+      rgba(255, 255, 255, 0.03) 2px,
+      rgba(0, 0, 0, 0) 1px,
+      rgba(0, 0, 0, 0) 8px
+    ),
+    repeating-linear-gradient(
+      0deg,
+      rgba(0, 0, 0, 0.08) 0px,
+      rgba(0, 0, 0, 0.08) 1px,
+      rgba(0, 0, 0, 0) 2px,
+      rgba(0, 0, 0, 0) 4px
+    ),
+    linear-gradient(160deg, #5b4638 0%, #45362d 50%, #332821 100%);
   background-attachment: fixed;
-  color: rgba(255, 255, 255, 0.85);
+  color: rgba(245, 236, 222, 0.92);
 }
 
 #root {
