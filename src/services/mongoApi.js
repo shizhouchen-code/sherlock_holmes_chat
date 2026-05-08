@@ -10,33 +10,20 @@ const api = async (path, options = {}) => {
   return text ? JSON.parse(text) : {};
 };
 
-// ── Users ────────────────────────────────────────────────────────────────────
-
-export const createUser = async (username, password, firstName = '', lastName = '', email = '') => {
-  await api('/api/users', {
-    method: 'POST',
-    body: JSON.stringify({ username, password, firstName, lastName, email }),
-  });
-};
-
-export const findUser = async (username, password) => {
-  const data = await api('/api/users/login', {
-    method: 'POST',
-    body: JSON.stringify({ username, password }),
-  });
-  return data.ok ? { username: data.username, firstName: data.firstName } : null;
-};
-
 // ── Sessions ─────────────────────────────────────────────────────────────────
 
-export const getSessions = async (username) => {
-  return api(`/api/sessions?username=${encodeURIComponent(username)}`);
+export const getSessions = async () => {
+  return api('/api/sessions');
 };
 
-export const createSession = async (username, agent = null, title = null) => {
+export const getBackendStatus = async () => {
+  return api('/api/status');
+};
+
+export const createSession = async (agent = null, title = null) => {
   return api('/api/sessions', {
     method: 'POST',
-    body: JSON.stringify({ username, agent, title }),
+    body: JSON.stringify({ agent, title }),
   });
 };
 

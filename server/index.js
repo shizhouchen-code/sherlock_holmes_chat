@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
+const path = require('path');
 const { MongoClient, ObjectId } = require('mongodb');
-const bcrypt = require('bcryptjs');
 const cors = require('cors');
 
 const app = express();
@@ -11,7 +11,7 @@ app.use(express.json({ limit: '10mb' }));
 const URI = process.env.REACT_APP_MONGODB_URI || process.env.MONGODB_URI || process.env.REACT_APP_MONGO_URI;
 const DB = 'chatapp';
 const RAG_DB = 'rag_docs';
-const RAG_COLLECTION = 'harry_potter';
+const RAG_COLLECTION = 'sherlock_holmes';
 const RAG_VECTOR_INDEX = process.env.RAG_VECTOR_INDEX || 'vector_index';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.REACT_APP_GEMINI_API_KEY;
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
@@ -19,11 +19,29 @@ const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || 'dR1Ptm3rjBUIbHia
 
 let db;
 let mongoClient;
+let mongoAvailable = false;
+let mongoError = null;
 
 async function connect() {
-  mongoClient = await MongoClient.connect(URI);
-  db = mongoClient.db(DB);
-  console.log('MongoDB connected');
+  try {
+    mongoClient = await MongoClient.connect(URI);
+    db = mongoClient.db(DB);
+    mongoAvailable = true;
+    mongoError = null;
+    console.log('MongoDB connected');
+  } catch (err) {
+    mongoAvailable = false;
+    mongoError = err?.message || 'Unknown MongoDB connection error';
+    console.error('MongoDB connection failed:', mongoError);
+  }
+}
+
+function requireMongo(res) {
+  if (mongoAvailable) return true;
+  res.status(503).json({
+    error: 'MongoDB is not available at this time. Chat is running in system-prompt-only mode.',
+  });
+  return false;
 }
 
 // ── Validate Gemini API key at startup ───────────────────────────────────────
@@ -69,68 +87,20 @@ async function embedQuery(query) {
   return data.embedding?.values || [];
 }
 
-app.get('/', (req, res) => {
-  res.send(`
-    <html>
-      <body style="font-family:sans-serif;padding:2rem;background:#00356b;color:white;min-height:100vh;display:flex;align-items:center;justify-content:center;margin:0">
-        <div style="text-align:center">
-          <h1>Chat API Server</h1>
-          <p>Backend is running. Use the React app at <a href="http://localhost:3000" style="color:#ffd700">localhost:3000</a></p>
-          <p><a href="/api/status" style="color:#ffd700">Check DB status</a></p>
-        </div>
-      </body>
-    </html>
-  `);
-});
-
 app.get('/api/status', async (req, res) => {
   try {
+    if (!mongoAvailable) {
+      return res.json({
+        mongoAvailable: false,
+        message: 'MongoDB is not available at this time. Chat is using system prompt only.',
+        usersCount: 0,
+        sessionsCount: 0,
+        error: mongoError,
+      });
+    }
     const usersCount = await db.collection('users').countDocuments();
     const sessionsCount = await db.collection('sessions').countDocuments();
-    res.json({ usersCount, sessionsCount });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Users ────────────────────────────────────────────────────────────────────
-
-app.post('/api/users', async (req, res) => {
-  try {
-    const { username, password, firstName, lastName, email } = req.body;
-    if (!username || !password)
-      return res.status(400).json({ error: 'Username and password required' });
-    if (!firstName || !lastName || !email)
-      return res.status(400).json({ error: 'First name, last name, and email required' });
-    const name = String(username).trim().toLowerCase();
-    const existing = await db.collection('users').findOne({ username: name });
-    if (existing) return res.status(400).json({ error: 'Username already exists' });
-    const hashed = await bcrypt.hash(password, 10);
-    await db.collection('users').insertOne({
-      username: name,
-      password: hashed,
-      firstName: String(firstName).trim(),
-      lastName: String(lastName).trim(),
-      email: String(email).trim().toLowerCase(),
-      createdAt: new Date().toISOString(),
-    });
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/users/login', async (req, res) => {
-  try {
-    const { username, password } = req.body;
-    if (!username || !password)
-      return res.status(400).json({ error: 'Username and password required' });
-    const name = username.trim().toLowerCase();
-    const user = await db.collection('users').findOne({ username: name });
-    if (!user) return res.status(401).json({ error: 'User not found' });
-    const ok = await bcrypt.compare(password, user.password);
-    if (!ok) return res.status(401).json({ error: 'Invalid password' });
-    res.json({ ok: true, username: name, firstName: user.firstName || null });
+    res.json({ mongoAvailable: true, usersCount, sessionsCount });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -140,11 +110,10 @@ app.post('/api/users/login', async (req, res) => {
 
 app.get('/api/sessions', async (req, res) => {
   try {
-    const { username } = req.query;
-    if (!username) return res.status(400).json({ error: 'username required' });
+    if (!requireMongo(res)) return;
     const sessions = await db
       .collection('sessions')
-      .find({ username })
+      .find({})
       .sort({ createdAt: -1 })
       .toArray();
     res.json(
@@ -163,11 +132,10 @@ app.get('/api/sessions', async (req, res) => {
 
 app.post('/api/sessions', async (req, res) => {
   try {
-    const { username, agent } = req.body;
-    if (!username) return res.status(400).json({ error: 'username required' });
+    if (!requireMongo(res)) return;
+    const { agent } = req.body;
     const { title } = req.body;
     const result = await db.collection('sessions').insertOne({
-      username,
       agent: agent || null,
       title: title || null,
       createdAt: new Date().toISOString(),
@@ -181,6 +149,7 @@ app.post('/api/sessions', async (req, res) => {
 
 app.delete('/api/sessions/:id', async (req, res) => {
   try {
+    if (!requireMongo(res)) return;
     await db.collection('sessions').deleteOne({ _id: new ObjectId(req.params.id) });
     res.json({ ok: true });
   } catch (err) {
@@ -190,6 +159,7 @@ app.delete('/api/sessions/:id', async (req, res) => {
 
 app.patch('/api/sessions/:id/title', async (req, res) => {
   try {
+    if (!requireMongo(res)) return;
     const { title } = req.body;
     await db.collection('sessions').updateOne(
       { _id: new ObjectId(req.params.id) },
@@ -205,6 +175,7 @@ app.patch('/api/sessions/:id/title', async (req, res) => {
 
 app.post('/api/messages', async (req, res) => {
   try {
+    if (!requireMongo(res)) return;
     const { session_id, role, content, imageData, charts, toolCalls, ragChunks } = req.body;
     if (!session_id || !role || content === undefined)
       return res.status(400).json({ error: 'session_id, role, content required' });
@@ -231,6 +202,7 @@ app.post('/api/messages', async (req, res) => {
 
 app.get('/api/messages', async (req, res) => {
   try {
+    if (!requireMongo(res)) return;
     const { session_id } = req.query;
     if (!session_id) return res.status(400).json({ error: 'session_id required' });
     const doc = await db
@@ -303,6 +275,7 @@ app.post('/api/tts', async (req, res) => {
 
 app.post('/api/rag/search', async (req, res) => {
   try {
+    if (!requireMongo(res)) return;
     const { query } = req.body;
     if (!query || typeof query !== 'string')
       return res.status(400).json({ error: 'query (string) required' });
@@ -347,16 +320,25 @@ app.post('/api/rag/search', async (req, res) => {
   }
 });
 
+const BUILD_DIR = path.join(__dirname, '..', 'build');
+app.use(express.static(BUILD_DIR));
+
+app.get(/^(?!\/api\/).*/, (req, res) => {
+  res.sendFile(path.join(BUILD_DIR, 'index.html'), (err) => {
+    if (err) {
+      res.status(404).send(
+        'React build not found. Run "npm run build" for production or "npm run dev" for local development.'
+      );
+    }
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3001;
 
-connect()
-  .then(() => validateGeminiKey())
-  .then(() => {
-    app.listen(PORT, () => console.log(`Server on http://localhost:${PORT}`));
-  })
-  .catch((err) => {
-    console.error('MongoDB connection failed:', err.message);
-    process.exit(1);
-  });
+app.listen(PORT, async () => {
+  console.log(`Server on http://localhost:${PORT}`);
+  await connect();
+  await validateGeminiKey();
+});

@@ -11,6 +11,7 @@ import {
   loadMessages,
   searchRag,
   speakText,
+  getBackendStatus,
 } from '../services/mongoApi';
 import EngagementChart from './EngagementChart';
 import './Chat.css';
@@ -142,6 +143,8 @@ export default function Chat({ username, firstName, onLogout }) {
   const [dragOver, setDragOver] = useState(false);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [geminiKeyError, setGeminiKeyError] = useState(null);
+  const [mongoNotice, setMongoNotice] = useState(null);
+  const [mongoAvailable, setMongoAvailable] = useState(true);
   const [playingMsgId, setPlayingMsgId] = useState(null);
   const [loadingTtsMsgId, setLoadingTtsMsgId] = useState(null);
 
@@ -154,15 +157,37 @@ export default function Chat({ username, firstName, onLogout }) {
   // so the messages useEffect knows to skip the reload (streaming is in progress).
   const justCreatedSessionRef = useRef(false);
 
-  // On login: load sessions from DB; 'new' means an unsaved pending chat
+  // Initialize DB status and sessions; 'new' means an unsaved pending chat
   useEffect(() => {
     const init = async () => {
-      const list = await getSessions(username);
-      setSessions(list);
+      let available = true;
+      try {
+        const status = await getBackendStatus();
+        available = status?.mongoAvailable !== false;
+        setMongoAvailable(available);
+        setMongoNotice(
+          available
+            ? null
+            : 'MongoDB is not available at this time. Chat is using system prompt only.'
+        );
+      } catch {
+        setMongoAvailable(false);
+        setMongoNotice('MongoDB is not available at this time. Chat is using system prompt only.');
+      }
+      if (available) {
+        try {
+          const list = await getSessions();
+          setSessions(list);
+        } catch {
+          setMongoAvailable(false);
+          setMongoNotice('MongoDB is not available at this time. Chat is using system prompt only.');
+          setSessions([]);
+        }
+      }
       setActiveSessionId('new'); // always start with a fresh empty chat on login
     };
     init();
-  }, [username]);
+  }, []);
 
   // Validate Gemini API key on mount
   useEffect(() => {
@@ -176,6 +201,7 @@ export default function Chat({ username, firstName, onLogout }) {
   }, []);
 
   useEffect(() => {
+    if (!mongoAvailable) return;
     if (!activeSessionId || activeSessionId === 'new') {
       setMessages([]);
       return;
@@ -358,11 +384,19 @@ export default function Chat({ username, firstName, onLogout }) {
     let sessionId = activeSessionId;
     if (sessionId === 'new') {
       const title = chatTitle();
-      const { id } = await createSession(username, 'lisa', title);
-      sessionId = id;
-      justCreatedSessionRef.current = true; // tell useEffect to skip the reload
-      setActiveSessionId(id);
-      setSessions((prev) => [{ id, agent: 'lisa', title, createdAt: new Date().toISOString(), messageCount: 0 }, ...prev]);
+      if (mongoAvailable) {
+        try {
+          const { id } = await createSession('sherlock_holmes', title);
+          sessionId = id;
+          justCreatedSessionRef.current = true; // tell useEffect to skip the reload
+          setActiveSessionId(id);
+          setSessions((prev) => [{ id, agent: 'sherlock_holmes', title, createdAt: new Date().toISOString(), messageCount: 0 }, ...prev]);
+        } catch {
+          setMongoAvailable(false);
+          setMongoNotice('MongoDB is not available at this time. Chat is using system prompt only.');
+          sessionId = 'new';
+        }
+      }
     }
 
     // ── Routing intent (computed first so we know whether Python/base64 is needed) ──
@@ -383,7 +417,7 @@ export default function Chat({ username, firstName, onLogout }) {
 
     // ── RAG: fetch Harry Potter chunks for text queries (when not in CSV tools mode) ──
     let ragChunks = [];
-    if (text && !useTools) {
+    if (text && !useTools && mongoAvailable) {
       try {
         ragChunks = await searchRag(text);
       } catch (err) {
@@ -469,7 +503,14 @@ ${ragChunks.map((c, i) => `--- Excerpt ${i + 1} ---\n${c.text}`).join('\n\n')}
     setStreaming(true);
 
     // Store display text only — base64 is never persisted
-    await saveMessage(sessionId, 'user', userContent, capturedImages.length ? capturedImages : null);
+    if (mongoAvailable && sessionId !== 'new') {
+      try {
+        await saveMessage(sessionId, 'user', userContent, capturedImages.length ? capturedImages : null);
+      } catch {
+        setMongoAvailable(false);
+        setMongoNotice('MongoDB is not available at this time. Chat is using system prompt only.');
+      }
+    }
 
     const imageParts = capturedImages.map((img) => ({ mimeType: img.mimeType, data: img.data }));
 
@@ -565,19 +606,26 @@ ${ragChunks.map((c, i) => `--- Excerpt ${i + 1} ---\n${c.text}`).join('\n\n')}
     const savedContent = structuredParts
       ? structuredParts.filter((p) => p.type === 'text').map((p) => p.text).join('\n')
       : fullContent;
-    await saveMessage(
-      sessionId,
-      'model',
-      savedContent,
-      null,
-      toolCharts.length ? toolCharts : null,
-      toolCalls.length ? toolCalls : null,
-      ragChunks.length ? ragChunks : null
-    );
+    if (mongoAvailable && sessionId !== 'new') {
+      try {
+        await saveMessage(
+          sessionId,
+          'model',
+          savedContent,
+          null,
+          toolCharts.length ? toolCharts : null,
+          toolCalls.length ? toolCalls : null,
+          ragChunks.length ? ragChunks : null
+        );
 
-    setSessions((prev) =>
-      prev.map((s) => (s.id === sessionId ? { ...s, messageCount: s.messageCount + 2 } : s))
-    );
+        setSessions((prev) =>
+          prev.map((s) => (s.id === sessionId ? { ...s, messageCount: s.messageCount + 2 } : s))
+        );
+      } catch {
+        setMongoAvailable(false);
+        setMongoNotice('MongoDB is not available at this time. Chat is using system prompt only.');
+      }
+    }
 
     setStreaming(false);
     inputRef.current?.focus();
@@ -682,7 +730,7 @@ ${ragChunks.map((c, i) => `--- Excerpt ${i + 1} ---\n${c.text}`).join('\n\n')}
 
         <div className="sidebar-footer">
           <span className="sidebar-username">{username}</span>
-          <button onClick={onLogout} className="sidebar-logout">
+          <button type="button" className="sidebar-logout" onClick={onLogout}>
             Log out
           </button>
         </div>
@@ -691,6 +739,12 @@ ${ragChunks.map((c, i) => `--- Excerpt ${i + 1} ---\n${c.text}`).join('\n\n')}
       {/* ── Main chat area ───────────────────────── */}
       <div className="chat-main">
         <>
+        {mongoNotice && (
+          <div className="mongo-unavailable-banner">
+            <span className="mongo-unavailable-banner-icon">!</span>
+            <span>{mongoNotice}</span>
+          </div>
+        )}
         {geminiKeyError && (
           <div className="gemini-key-banner">
             <span className="gemini-key-banner-icon">⚠</span>
@@ -710,7 +764,7 @@ ${ragChunks.map((c, i) => `--- Excerpt ${i + 1} ---\n${c.text}`).join('\n\n')}
           {messages.map((m) => (
             <div key={m.id} className={`chat-msg ${m.role}`}>
               <div className="chat-msg-meta">
-                <span className="chat-msg-role">{m.role === 'user' ? username : 'Lisa'}</span>
+                <span className="chat-msg-role">{m.role === 'user' ? username : 'Sherlock Holmes'}</span>
                 <span className="chat-msg-time">
                   {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </span>

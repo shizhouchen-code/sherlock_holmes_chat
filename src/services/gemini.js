@@ -4,7 +4,7 @@ import { CSV_TOOL_DECLARATIONS } from './csvTools';
 const API_KEY = process.env.REACT_APP_GEMINI_API_KEY || '';
 const genAI = new GoogleGenerativeAI(API_KEY);
 
-const MODEL = 'gemini-2.0-flash';
+const MODEL = 'gemini-2.5-flash';
 
 /** Test that the Gemini API key is valid. Returns { ok: true } or { ok: false, error: string }. */
 export async function validateGeminiKey() {
