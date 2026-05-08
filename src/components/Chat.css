@@ -475,9 +475,9 @@
 
 .chat-msg.model .chat-msg-content p {
   margin: 0 0 0.6em;
-  font-family: 'Petit Formal Script', 'Brush Script MT', 'Segoe Script', cursive;
-  font-size: 1.3rem;
-  line-height: 1.34;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.93rem;
+  line-height: 1.6;
   letter-spacing: 0;
   color: #130d07;
 }
@@ -488,11 +488,11 @@
 .chat-msg.model .chat-msg-content h1,
 .chat-msg.model .chat-msg-content h2,
 .chat-msg.model .chat-msg-content h3 {
-  font-family: 'Petit Formal Script', 'Brush Script MT', 'Segoe Script', cursive;
+  font-family: 'Inter', sans-serif;
   font-weight: 700;
   color: #130d07;
   margin: 0.75em 0 0.35em;
-  line-height: 1.3;
+  line-height: 1.4;
 }
 .chat-msg.model .chat-msg-content h1 { font-size: 1.15rem; }
 .chat-msg.model .chat-msg-content h2 { font-size: 1.05rem; }
