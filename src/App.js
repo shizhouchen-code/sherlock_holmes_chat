@@ -34,7 +34,7 @@ function App() {
       setGateError('');
       return;
     }
-    setGateError('Invalid access password.');
+    setGateError('That key does not fit the lock.');
   };
 
   const handleLogout = () => {
@@ -51,51 +51,75 @@ function App() {
   return (
     <div className="App gate-page">
       <div className="gate-panel">
-        <h1 className="gate-title">Unlock App</h1>
-        <p className="gate-subtitle">Restricted access.</p>
+        <header className="gate-header">
+          <p className="gate-eyebrow">221B Baker Street</p>
+          <h1 className="gate-title">Talk to Sherlock Holmes</h1>
+          <p className="gate-tagline">
+            AI chatbot based on the original canon
+            <br />
+            by Sir Arthur Conan Doyle
+          </p>
+          <p className="gate-subtitle">Sign in and begin!</p>
+        </header>
 
-        <div className="gate-input-row">
-          <input
-            type="text"
-            className="gate-password-input"
-            placeholder="Enter name"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-          />
+        <div className="gate-divider" aria-hidden="true">
+          <span className="gate-divider-line" />
+          <span className="gate-divider-glyph">✦</span>
+          <span className="gate-divider-line" />
         </div>
 
-        <div
-          className={`gate-input-row ${isDropTargetActive ? 'drop-active' : ''}`}
-          onDragOver={(event) => {
-            event.preventDefault();
-            setIsDropTargetActive(true);
-          }}
-          onDragLeave={() => setIsDropTargetActive(false)}
-          onDrop={handleDropIntoField}
-        >
-          <input
-            type="password"
-            className="gate-password-input"
-            placeholder="Enter password"
-            value={password}
-            onChange={(event) => {
-              setPassword(event.target.value);
-              setGateError('');
-            }}
-          />
-          <button
-            type="button"
-            draggable
-            className="gate-unlock-dragger"
-            onDragStart={handleUnlockDragStart}
-            title="Drag this into the password field"
-            aria-label="Drag unlock icon into the password field"
-          >
-            🔓
-          </button>
+        <div className="gate-form">
+          <label className="gate-field">
+            <span className="gate-field-label">Your name</span>
+            <div className="gate-input-row">
+              <input
+                type="text"
+                className="gate-password-input"
+                placeholder="Watson, Lestrade, or another visitor…"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                autoComplete="name"
+              />
+            </div>
+          </label>
+
+          <label className="gate-field">
+            <span className="gate-field-label">The key</span>
+            <div
+              className={`gate-input-row ${isDropTargetActive ? 'drop-active' : ''}`}
+              onDragOver={(event) => {
+                event.preventDefault();
+                setIsDropTargetActive(true);
+              }}
+              onDragLeave={() => setIsDropTargetActive(false)}
+              onDrop={handleDropIntoField}
+            >
+              <input
+                type="password"
+                className="gate-password-input"
+                placeholder="A word known only to those admitted…"
+                value={password}
+                onChange={(event) => {
+                  setPassword(event.target.value);
+                  setGateError('');
+                }}
+                autoComplete="current-password"
+              />
+              <button
+                type="button"
+                draggable
+                className="gate-unlock-dragger"
+                onDragStart={handleUnlockDragStart}
+                title="Drag onto the key field"
+                aria-label="Drag the brass key onto the key field"
+              >
+                <span className="gate-key-icon" aria-hidden="true">🗝</span>
+              </button>
+            </div>
+          </label>
         </div>
 
-        {gateError && <p className="gate-error">{gateError}</p>}
+        {gateError && <p className="gate-error" role="alert">{gateError}</p>}
       </div>
     </div>
   );

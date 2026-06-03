@@ -996,7 +996,12 @@ ${ragChunks.map((c, i) => `--- Excerpt ${i + 1} ---\n${c.text}`).join('\n\n')}
               disabled={streaming}
               title="Attach image or CSV"
             >
-              📎
+              <svg className="attach-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M16.5 6.5v8.25a4.75 4.75 0 1 1-9.5 0V5.75a3.25 3.25 0 1 1 6.5 0v8.5a2 2 0 1 1-4 0V6.75h1.5v7.5a.5.5 0 0 0 1 0V5.75a1.75 1.75 0 1 0-3.5 0v9a3.25 3.25 0 1 0 6.5 0V6.5h-1.5z"
+                />
+              </svg>
             </button>
             <input
               ref={inputRef}
