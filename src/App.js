@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Chat from './components/Chat';
+import { getAuthStatus, unlockGate, logoutGate } from './services/mongoApi';
 import './App.css';
 
-const GATE_PASSWORD = process.env.REACT_APP_GATE_PASSWORD;
 const DRAG_TOKEN = 'unlock-symbol';
 
 function App() {
@@ -11,6 +11,20 @@ function App() {
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [gateError, setGateError] = useState('');
   const [isDropTargetActive, setIsDropTargetActive] = useState(false);
+  const [authChecking, setAuthChecking] = useState(true);
+
+  useEffect(() => {
+    getAuthStatus()
+      .then((status) => {
+        if (status.authenticated || !status.gateEnabled) {
+          setIsUnlocked(true);
+        }
+      })
+      .catch(() => {
+        // stay on gate screen
+      })
+      .finally(() => setAuthChecking(false));
+  }, []);
 
   const handleUnlockDragStart = (event) => {
     event.dataTransfer.effectAllowed = 'move';
@@ -18,31 +32,42 @@ function App() {
     setGateError('');
   };
 
-  const handleDropIntoField = (event) => {
+  const handleDropIntoField = async (event) => {
     event.preventDefault();
     setIsDropTargetActive(false);
     const dragData = event.dataTransfer.getData('text/plain');
     if (dragData !== DRAG_TOKEN) return;
 
-    if (!GATE_PASSWORD) {
-      setGateError('Gate password is not configured. Set REACT_APP_GATE_PASSWORD in your .env and restart.');
-      return;
-    }
-
-    if (password.trim() === GATE_PASSWORD) {
+    try {
+      await unlockGate(password.trim());
       setIsUnlocked(true);
       setGateError('');
-      return;
+    } catch (err) {
+      setGateError(err.message || 'That key does not fit the lock.');
     }
-    setGateError('That key does not fit the lock.');
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await logoutGate();
+    } catch {
+      // still reset local UI
+    }
     setIsUnlocked(false);
     setPassword('');
     setGateError('');
     setIsDropTargetActive(false);
   };
+
+  if (authChecking) {
+    return (
+      <div className="App gate-page">
+        <div className="gate-panel">
+          <p className="gate-subtitle">Checking admission…</p>
+        </div>
+      </div>
+    );
+  }
 
   if (isUnlocked) {
     return <Chat username={name.trim() || 'Guest'} firstName={null} onLogout={handleLogout} />;

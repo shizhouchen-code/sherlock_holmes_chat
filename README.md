@@ -24,15 +24,17 @@ Single-page React + Express app where users chat with a Sherlock Holmes style as
 
 Create `.env` from `.env.example` and set values:
 
-- `REACT_APP_GEMINI_API_KEY` (required): Gemini key used by frontend chat.
-- `GEMINI_API_KEY` (required for backend RAG embeddings): Gemini key used by server embedding endpoint.
-- `MONGODB_URI` or `REACT_APP_MONGODB_URI` (recommended): MongoDB connection string.
+- `GEMINI_API_KEY` (required): Gemini key used by the server for chat, RAG embeddings, and streaming.
+- `MONGODB_URI` (recommended): MongoDB connection string.
+- `GATE_PASSWORD` (optional): password for the drag-to-unlock gate; validated server-side.
+- `AUTH_SECRET` (required when `GATE_PASSWORD` is set): random string used to sign auth cookies.
 - `RAG_VECTOR_INDEX` (optional): Atlas vector index name, default `vector_index`.
 - `ELEVENLABS_API_KEY` (optional): enables TTS endpoint.
 - `ELEVENLABS_VOICE_ID` (optional): voice override for TTS endpoint.
 - `PORT` (optional): backend port, default `3001`.
 - `REACT_APP_API_URL` (optional): frontend API base URL for split deployments; leave empty for local proxy or same-origin single service.
-- `REACT_APP_GATE_PASSWORD` (optional): password for the drag-to-unlock gate on the landing screen; defaults to `sherlock`.
+
+**Security note:** Do not use `REACT_APP_` prefixes for secrets. API keys and the gate password are server-only. All `/api/*` routes (except auth) require a valid session cookie when the gate is enabled.
 
 ## Running Locally
 
@@ -70,14 +72,15 @@ Use one Render Web Service (not split frontend/backend):
 
 Set environment variables in Render:
 
-- `REACT_APP_GEMINI_API_KEY`
 - `GEMINI_API_KEY`
-- `MONGODB_URI` (or `REACT_APP_MONGODB_URI`)
+- `MONGODB_URI`
+- `GATE_PASSWORD`
+- `AUTH_SECRET`
 - `RAG_VECTOR_INDEX` (optional)
 - `ELEVENLABS_API_KEY` (optional)
 - `ELEVENLABS_VOICE_ID` (optional)
 
-Important: `REACT_APP_*` vars are baked into the frontend at build time, so redeploy after changing them.
+Production builds disable source maps automatically via `.env.production`.
 
 ## Data Requirements For RAG
 
@@ -90,7 +93,13 @@ RAG expects MongoDB data in:
 
 ## Key Endpoints
 
-- `GET /api/status` - health + Mongo availability
+- `GET /api/auth/status` - check gate session (public)
+- `POST /api/auth/unlock` - validate gate password (public)
+- `POST /api/auth/logout` - clear gate session (public)
+- `GET /api/status` - health + Mongo availability (authenticated)
+- `GET /api/chat/validate` - Gemini availability (authenticated)
+- `POST /api/chat/stream` - streamed chat (authenticated)
+- `POST /api/chat/csv-tools` - CSV tool-calling chat (authenticated)
 - `GET /api/sessions` - list chat sessions
 - `POST /api/sessions` - create chat session
 - `DELETE /api/sessions/:id` - delete session
@@ -103,8 +112,10 @@ RAG expects MongoDB data in:
 ## Project Structure
 
 - `src/components/Chat.js` - main chat UI and routing logic
-- `src/services/gemini.js` - Gemini streaming/tool integration
+- `src/services/gemini.js` - frontend client for server-proxied Gemini chat
 - `src/services/csvTools.js` - CSV parsing and local tool execution
 - `src/services/mongoApi.js` - frontend API client
 - `server/index.js` - Express API + static frontend hosting
+- `server/gemini.js` - server-side Gemini integration
+- `server/auth.js` - cookie-based gate authentication
 - `public/prompt_chat.txt` - system prompt/persona instructions

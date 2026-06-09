@@ -1,21 +1,51 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
+const cookieParser = require('cookie-parser');
+const rateLimit = require('express-rate-limit');
 const { MongoClient, ObjectId } = require('mongodb');
 const cors = require('cors');
+const { registerAuthRoutes, requireAuth } = require('./auth');
+const gemini = require('./gemini');
 
 const app = express();
-app.use(cors());
+
+const corsOrigin = process.env.CORS_ORIGIN || true;
+app.use(cors({ origin: corsOrigin, credentials: true }));
+app.use(cookieParser());
 app.use(express.json({ limit: '10mb' }));
 
-const URI = process.env.REACT_APP_MONGODB_URI || process.env.MONGODB_URI || process.env.REACT_APP_MONGO_URI;
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+const chatLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+const expensiveLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use('/api', apiLimiter);
+registerAuthRoutes(app);
+
+const URI = process.env.MONGODB_URI;
 const DB = 'chatapp';
 const RAG_DB = 'rag_docs';
 const RAG_COLLECTION = 'sherlock_holmes';
 const RAG_VECTOR_INDEX = process.env.RAG_VECTOR_INDEX || 'vector_index';
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.REACT_APP_GEMINI_API_KEY;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
 const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || 'dR1Ptm3rjBUIbHiaywdJ';
+const BUILD_DIR = path.join(__dirname, '..', 'build');
 
 let db;
 let mongoClient;
@@ -23,6 +53,12 @@ let mongoAvailable = false;
 let mongoError = null;
 
 async function connect() {
+  if (!URI) {
+    mongoAvailable = false;
+    mongoError = 'MONGODB_URI is not configured';
+    console.warn('[MongoDB]', mongoError);
+    return;
+  }
   try {
     mongoClient = await MongoClient.connect(URI);
     db = mongoClient.db(DB);
@@ -31,8 +67,8 @@ async function connect() {
     console.log('MongoDB connected');
   } catch (err) {
     mongoAvailable = false;
-    mongoError = err?.message || 'Unknown MongoDB connection error';
-    console.error('MongoDB connection failed:', mongoError);
+    mongoError = 'Database connection failed';
+    console.error('MongoDB connection failed:', err?.message || err);
   }
 }
 
@@ -44,27 +80,15 @@ function requireMongo(res) {
   return false;
 }
 
-// ── Validate Gemini API key at startup ───────────────────────────────────────
-async function validateGeminiKey() {
-  if (!GEMINI_API_KEY || !GEMINI_API_KEY.trim()) {
-    console.warn('[RAG] GEMINI_API_KEY missing — RAG embeddings will fail. Add to .env');
-    return;
-  }
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models?key=${GEMINI_API_KEY}`
-    );
-    if (!res.ok) {
-      console.warn('[RAG] Gemini API key invalid or restricted (', res.status, '). RAG will fail.');
-      return;
-    }
-    console.log('[RAG] Gemini API key OK');
-  } catch (err) {
-    console.warn('[RAG] Could not validate Gemini key:', err.message);
+async function validateGeminiKeyAtStartup() {
+  const result = await gemini.validateGeminiKey();
+  if (result.ok) {
+    console.log('[Gemini] API key OK');
+  } else {
+    console.warn('[Gemini]', result.error);
   }
 }
 
-// ── Embed query using Google Gemini API ───────────────────────────────────────
 async function embedQuery(query) {
   if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY required for RAG');
   const res = await fetch(
@@ -81,13 +105,15 @@ async function embedQuery(query) {
   );
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`Embedding failed: ${err}`);
+    throw new Error('Embedding failed');
   }
   const data = await res.json();
   return data.embedding?.values || [];
 }
 
-app.get('/api/status', async (req, res) => {
+// ── Protected API routes ──────────────────────────────────────────────────────
+
+app.get('/api/status', requireAuth, async (req, res) => {
   try {
     if (!mongoAvailable) {
       return res.json({
@@ -95,20 +121,75 @@ app.get('/api/status', async (req, res) => {
         message: 'MongoDB is not available at this time. Chat is using system prompt only.',
         usersCount: 0,
         sessionsCount: 0,
-        error: mongoError,
       });
     }
     const usersCount = await db.collection('users').countDocuments();
     const sessionsCount = await db.collection('sessions').countDocuments();
     res.json({ mongoAvailable: true, usersCount, sessionsCount });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Status check failed' });
   }
 });
 
-// ── Sessions ─────────────────────────────────────────────────────────────────
+app.get('/api/chat/validate', requireAuth, async (req, res) => {
+  const result = await gemini.validateGeminiKey();
+  res.status(result.ok ? 200 : 503).json(result);
+});
 
-app.get('/api/sessions', async (req, res) => {
+app.post('/api/chat/stream', requireAuth, chatLimiter, async (req, res) => {
+  try {
+    const { history, newMessage, imageParts, useCodeExecution } = req.body;
+    if (!newMessage || typeof newMessage !== 'string') {
+      return res.status(400).json({ error: 'newMessage (string) required' });
+    }
+
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.flushHeaders?.();
+
+    for await (const chunk of gemini.streamChat(
+      BUILD_DIR,
+      history || [],
+      newMessage,
+      imageParts || [],
+      Boolean(useCodeExecution)
+    )) {
+      res.write(`${JSON.stringify(chunk)}\n`);
+    }
+    res.end();
+  } catch (err) {
+    console.error('[chat/stream]', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Chat stream failed' });
+    } else {
+      res.write(`${JSON.stringify({ type: 'error', error: 'Chat stream failed' })}\n`);
+      res.end();
+    }
+  }
+});
+
+app.post('/api/chat/csv-tools', requireAuth, chatLimiter, async (req, res) => {
+  try {
+    const { history, newMessage, csvHeaders, toolResponses } = req.body;
+    if (!newMessage || typeof newMessage !== 'string') {
+      return res.status(400).json({ error: 'newMessage (string) required' });
+    }
+
+    const result = await gemini.runCsvToolsChat(
+      BUILD_DIR,
+      history || [],
+      newMessage,
+      csvHeaders || [],
+      toolResponses || []
+    );
+    res.json(result);
+  } catch (err) {
+    console.error('[chat/csv-tools]', err);
+    res.status(500).json({ error: 'CSV tool chat failed' });
+  }
+});
+
+app.get('/api/sessions', requireAuth, async (req, res) => {
   try {
     if (!requireMongo(res)) return;
     const sessions = await db
@@ -126,11 +207,11 @@ app.get('/api/sessions', async (req, res) => {
       }))
     );
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Failed to load sessions' });
   }
 });
 
-app.post('/api/sessions', async (req, res) => {
+app.post('/api/sessions', requireAuth, async (req, res) => {
   try {
     if (!requireMongo(res)) return;
     const { agent } = req.body;
@@ -143,21 +224,21 @@ app.post('/api/sessions', async (req, res) => {
     });
     res.json({ id: result.insertedId.toString() });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Failed to create session' });
   }
 });
 
-app.delete('/api/sessions/:id', async (req, res) => {
+app.delete('/api/sessions/:id', requireAuth, async (req, res) => {
   try {
     if (!requireMongo(res)) return;
     await db.collection('sessions').deleteOne({ _id: new ObjectId(req.params.id) });
     res.json({ ok: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Failed to delete session' });
   }
 });
 
-app.patch('/api/sessions/:id/title', async (req, res) => {
+app.patch('/api/sessions/:id/title', requireAuth, async (req, res) => {
   try {
     if (!requireMongo(res)) return;
     const { title } = req.body;
@@ -167,18 +248,17 @@ app.patch('/api/sessions/:id/title', async (req, res) => {
     );
     res.json({ ok: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Failed to update session' });
   }
 });
 
-// ── Messages ─────────────────────────────────────────────────────────────────
-
-app.post('/api/messages', async (req, res) => {
+app.post('/api/messages', requireAuth, async (req, res) => {
   try {
     if (!requireMongo(res)) return;
     const { session_id, role, content, imageData, charts, toolCalls, ragChunks } = req.body;
-    if (!session_id || !role || content === undefined)
+    if (!session_id || !role || content === undefined) {
       return res.status(400).json({ error: 'session_id, role, content required' });
+    }
     const msg = {
       role,
       content,
@@ -196,18 +276,16 @@ app.post('/api/messages', async (req, res) => {
     );
     res.json({ ok: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Failed to save message' });
   }
 });
 
-app.get('/api/messages', async (req, res) => {
+app.get('/api/messages', requireAuth, async (req, res) => {
   try {
     if (!requireMongo(res)) return;
     const { session_id } = req.query;
     if (!session_id) return res.status(400).json({ error: 'session_id required' });
-    const doc = await db
-      .collection('sessions')
-      .findOne({ _id: new ObjectId(session_id) });
+    const doc = await db.collection('sessions').findOne({ _id: new ObjectId(session_id) });
     const raw = doc?.messages || [];
     const msgs = raw.map((m, i) => {
       const arr = m.imageData
@@ -230,19 +308,19 @@ app.get('/api/messages', async (req, res) => {
     });
     res.json(msgs);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Failed to load messages' });
   }
 });
 
-// ── TTS: ElevenLabs text-to-speech ───────────────────────────────────────────
-
-app.post('/api/tts', async (req, res) => {
+app.post('/api/tts', requireAuth, expensiveLimiter, async (req, res) => {
   try {
     const { text } = req.body;
-    if (!text || typeof text !== 'string')
+    if (!text || typeof text !== 'string') {
       return res.status(400).json({ error: 'text (string) required' });
-    if (!ELEVENLABS_API_KEY)
-      return res.status(500).json({ error: 'ELEVENLABS_API_KEY not configured' });
+    }
+    if (!ELEVENLABS_API_KEY) {
+      return res.status(500).json({ error: 'TTS is not configured' });
+    }
 
     const voiceId = ELEVENLABS_VOICE_ID;
     const ttsRes = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
@@ -258,8 +336,7 @@ app.post('/api/tts', async (req, res) => {
     });
 
     if (!ttsRes.ok) {
-      const errText = await ttsRes.text();
-      return res.status(ttsRes.status).json({ error: errText || 'ElevenLabs TTS failed' });
+      return res.status(ttsRes.status).json({ error: 'ElevenLabs TTS failed' });
     }
 
     const audioBuffer = await ttsRes.arrayBuffer();
@@ -267,22 +344,22 @@ app.post('/api/tts', async (req, res) => {
     res.send(Buffer.from(audioBuffer));
   } catch (err) {
     console.error('[TTS]', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'TTS failed' });
   }
 });
 
-// ── RAG: Vector search on Harry Potter collection ────────────────────────────
-
-app.post('/api/rag/search', async (req, res) => {
+app.post('/api/rag/search', requireAuth, expensiveLimiter, async (req, res) => {
   try {
     if (!requireMongo(res)) return;
     const { query } = req.body;
-    if (!query || typeof query !== 'string')
+    if (!query || typeof query !== 'string') {
       return res.status(400).json({ error: 'query (string) required' });
+    }
 
     const vector = await embedQuery(query.trim());
-    if (vector.length !== 768)
-      return res.status(500).json({ error: `Expected 768-dim embedding, got ${vector.length}` });
+    if (vector.length !== 768) {
+      return res.status(500).json({ error: 'Embedding dimension mismatch' });
+    }
 
     const ragDb = mongoClient.db(RAG_DB);
     const pipeline = [
@@ -316,11 +393,10 @@ app.post('/api/rag/search', async (req, res) => {
     });
   } catch (err) {
     console.error('[RAG search]', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'RAG search failed' });
   }
 });
 
-const BUILD_DIR = path.join(__dirname, '..', 'build');
 app.use(express.static(BUILD_DIR));
 
 app.get(/^(?!\/api\/).*/, (req, res) => {
@@ -333,12 +409,10 @@ app.get(/^(?!\/api\/).*/, (req, res) => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-
 const PORT = process.env.PORT || 3001;
 
 app.listen(PORT, async () => {
   console.log(`Server on http://localhost:${PORT}`);
   await connect();
-  await validateGeminiKey();
+  await validateGeminiKeyAtStartup();
 });
